@@ -185,7 +185,7 @@ class BoomJoystick(object):
 
         self.yaw = self.joystick.axis[0]
         self.pitch = self.joystick.axis[1]
-        self.stretch = self.joystick.button[0] - self.joystick.button[3]
+        self.stretch = (1.0 - self.throttle.axis[2]) / 2.0
 
         self.track_click = self.joystick.button_click[6]
         self.track_x = self.joystick.button[11] - self.joystick.button[13]
@@ -197,8 +197,6 @@ class BoomJoystick(object):
             self.menu_option = 2
         else:
             self.menu_option = 0
-
-        print(self.track_click)
 
 
 class TestJoystick_Boom(object):
@@ -226,12 +224,11 @@ class TestJoystick_Boom(object):
         self.pitch = self.joystick.axis[1]
         self.stretch = self.joystick.button[0] - self.joystick.button[2]
 
+        # menu_option should be cleared manually
         if self.joystick.hat_click[0][1]:
             self.menu_option = self.joystick.hat[0][1]
         elif self.joystick.button_click[1]:
             self.menu_option = 2
-        else:
-            self.menu_option = 0
 
         self.track_click = self.joystick.button_click[6]
         self.track_x = self.joystick.button[4] - self.joystick.button[5]
@@ -278,9 +275,9 @@ class PS4Robot(object):
 
 
 if __name__ == '__main__':
-    #plane = BoomJoystick()
-    plane = PS4Robot()
-    print(plane.ps4.name())
+    plane = BoomJoystick()
+    #plane = PS4Robot()
+    #print(plane.ps4.name())
     while True:
         plane.refresh()
         time.sleep(0.1)

@@ -3,10 +3,13 @@ import numpy as np
 import random
 import torch
 import sys
+import math
 from filterpy.kalman import KalmanFilter
 from filterpy.common import Q_discrete_white_noise
 from enum import Enum
 from CoilNet import CoilNet
+from PIL import Image
+from yolo import YOLO
 from ZEDCamera import ZEDCamera
 
 """
@@ -43,28 +46,36 @@ class PlaneTracker(object):
 
         # A set of sub-images are generated around the target, their distribution and count are decided here.
         self.rand_offset = 32
-        self.rand_count = 8
+        self.rand_count = 4
+
+        # YOLO V4
+        self.yolo = YOLO()
 
         # A kalman-filter is used to track the target by default.
+        # A low-pass filter is also defined
+        self.__init_Kalman()
+        self.low_pass_alpha = 0.3
         self.filter_type = FilterType.KALMAN
-        self.first_scan = True
-        self.kalman_filter = KalmanFilter(dim_x=4, dim_z=2)
-        self.kalman_filter.F = np.array([[1.0, 1.0, 0.0, 0.0],
-                                         [0.0, 1.0, 0.0, 0.0],
-                                         [0.0, 0.0, 1.0, 1.0],
-                                         [0.0, 0.0, 0.0, 1.0]])
-        self.kalman_filter.H = np.array([1.0, 0.0, 1.0, 0.0])
-        self.kalman_filter.P *= 0.1
-        self.kalman_filter.R *= 0.5
-        self.kalman_filter.Q = Q_discrete_white_noise(dim=4, dt=1, var=0.5)
 
-        # A simple filter
-        self.low_pass_x = 0.0
-        self.low_pass_y = 0.0
-        self.low_pass_alpha = 0.5
+        self.target = None               # filtered target position
+        self.raw_target = None     # target position without filtering
 
-        self.target = (0, 0)
-        self.mouse_pos = (0, 0)
+    def __init_Kalman(self):
+        self.kalman_x = KalmanFilter(dim_x=2, dim_z=1)
+        self.kalman_x.F = np.array([[1.0, 1.0],
+                                    [0.0, 1.0]])
+        self.kalman_x.H = np.array([[1.0, 0.0]])
+        self.kalman_x.P *= 10
+        self.kalman_x.R *= 1
+        self.kalman_x.Q = Q_discrete_white_noise(dim=2, dt=1, var=0.1)
+
+        self.kalman_y = KalmanFilter(dim_x=2, dim_z=1)
+        self.kalman_y.F = np.array([[1.0, 1.0],
+                                    [0.0, 1.0]])
+        self.kalman_y.H = np.array([[1.0, 0.0]])
+        self.kalman_y.P *= 10
+        self.kalman_y.R *= 1
+        self.kalman_y.Q = Q_discrete_white_noise(dim=2, dt=1, var=0.1)
 
     @staticmethod
     def __trans_windows(init_center, x_range, y_range, step):
@@ -99,6 +110,10 @@ class PlaneTracker(object):
 
         return left, top, right, bottom
 
+    @staticmethod
+    def __distance(p1, p2):
+        return math.sqrt((p1[0] - p2[0]) * (p1[0] - p2[0]) + (p1[1] - p2[1]) * (p1[1] - p2[1]))
+
     def __get_sub_image(self, img, center, img_size):
         left, top, right, bottom = self.__img_window(center, img_size)
 
@@ -119,33 +134,41 @@ class PlaneTracker(object):
         sub_img = img[top: bottom, left: right]
         return sub_img
 
-    def __low_pass_filter(self, x, y):
-        if self.first_scan:
-            self.low_pass_x = x
-            self.low_pass_y = y
-        else:
-            self.low_pass_x = self.low_pass_alpha * self.low_pass_x + (1.0 - self.low_pass_alpha) * x
-            self.low_pass_y = self.low_pass_alpha * self.low_pass_y + (1.0 - self.low_pass_alpha) * y
-        return self.low_pass_x, self.low_pass_y
-
     def __kalman_filter(self, x, y):
-        if self.first_scan:
-            pass
-        else:
-            self.kalman_filter.predict()
-            self.kalman_filter.update([[x, y]])
-            return self.kalman_filter.x[0], self.kalman_filter.x[1]
+        """
+        self.kalman_filter.predict()
+        self.kalman_filter.update([[x, y]])
+        return self.kalman_filter.x[0], self.kalman_filter.x[1]
+        """
+        self.kalman_x.predict()
+        self.kalman_x.update(x)
+
+        self.kalman_y.predict()
+        self.kalman_y.update(y)
+
+        return self.kalman_x.x[0], self.kalman_y.x[0]
 
     def __filter(self, x, y):
         if self.filter_type == FilterType.KALMAN:
+            # note: the belief of the result should be checked
             x, y = self.__kalman_filter(x, y)
         elif self.filter_type == FilterType.LOW_PASS:
-            x, y = self.__low_pass_filter(x, y)
+            if self.target is not None:
+                if self.__distance(self.target, (x, y)) > 100:
+                    x, y = None, None
+                else:
+                    x = self.low_pass_alpha * self.target[0] + (1.0 - self.low_pass_alpha) * x
+                    y = self.low_pass_alpha * self.target[1] + (1.0 - self.low_pass_alpha) * y
+        return None if x is None else (int(x), int(y))
 
-        self.first_scan = False
-        return x, y
+    def __detect_by_yolo(self, image):
+        frame = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        frame = Image.fromarray(np.uint8(frame))
+        inform, _ = self.yolo.detect_image(frame)
 
-    def __get_target(self, frame, init_center):
+        return inform
+
+    def __detect_by_cnn(self, frame, init_center):
         # a set of images are clipped around the init center, each one is used to obtain one center location
         w_center = self.__trans_windows_rand(init_center, self.rand_offset, self.rand_offset, self.rand_count)
 
@@ -171,10 +194,7 @@ class PlaneTracker(object):
         x = values[0] / len(params)
         y = values[1] / len(params)
 
-        # filter the result
-        x, y = self.__filter(x, y)
-
-        return int(x), int(y)
+        return x, y
 
     def start_tracking(self):
         self.tracking = True
@@ -184,9 +204,23 @@ class PlaneTracker(object):
         self.tracking = False
 
     def track(self, frame):
-        x, y = self.__get_target(frame, self.target)
-        self.target = (x, y)
-        return x, y
+        # detect the target by yolo first
+        # if the target cannot be detected when tracking starts, the target will be set None
+        yolo_rst = self.__detect_by_yolo(frame)
+        if yolo_rst is None or yolo_rst[2] < 0.4:
+            return None
+        else:
+            target = (yolo_rst[0], yolo_rst[1])
+
+        # find the accurate position by cnn fitting
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        x, y = self.__detect_by_cnn(frame, target)
+        self.raw_target = (int(x), int(y))
+
+        # filter the result
+        # if the target is likely to be wrong, the filter returns None
+        self.target = self.__filter(x, y)
+        return self.target
 
     def test(self, frame, key, window_width):
         grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

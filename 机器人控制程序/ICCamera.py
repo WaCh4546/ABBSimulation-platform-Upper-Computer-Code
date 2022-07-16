@@ -72,6 +72,7 @@ class ICCamera(object):
 
 
 if __name__ == '__main__':
+    print(ICCamera.enum_names())
     devices = ICCamera.enum_devices()
     while True:
         img = devices[0].snap()

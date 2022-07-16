@@ -13,7 +13,7 @@ from ZEDCamera import ZEDCamera
 from RobotABB import RobotABB
 
 # configurations for calibration
-NO_ROBOT = True
+NO_ROBOT = False
 INIT_POS_EULER = (-400, 10, 0, -90, 0, -90)
 ROBOT_IP = "192.168.1.103"
 ROBOT_PORT = 8002
@@ -133,6 +133,7 @@ class HandEyeCali(object):
         self.cali_name = robot_eye.eye_name if robot_eye is not None else "CaliTest"
 
         self.screen_width, self.screen_height = self.__get_window_size()
+        self.screen_width = int(self.screen_width / 2)
         self.window_width = self.screen_width
 
         cv2.namedWindow(self.cali_name, cv2.WND_PROP_FULLSCREEN)
@@ -363,7 +364,7 @@ class HandEyeCali(object):
 
         # add a pair of hand and eye samples
         elif key == ord('a') or key == ord('A'):
-            if all([self.__eye_sample, self.__hand_sample1, self.__hand_sample2]):
+            if self.__eye_sample is not None and self.__hand_sample1 is not None and self.__hand_sample2 is not None:
                 v_hand = (self.__hand_sample2[0] - self.__hand_sample1[0],
                           self.__hand_sample2[1] - self.__hand_sample1[1],
                           self.__hand_sample2[2] - self.__hand_sample1[2])
@@ -386,7 +387,7 @@ class HandEyeCali(object):
             if self.__hand_sample1 is None:
                 self.__print("Failed to get robot coordinate!")
 
-            if all([self.__eye_sample, self.__hand_sample1]):
+            if self.__eye_sample is not None and self.__hand_sample1 is not None:
                 self.cali_samples.append((self.__eye_sample,
                                           (self.__hand_sample1[0], self.__hand_sample1[1], self.__hand_sample1[2]),
                                           (self.__hand_sample1[3], self.__hand_sample1[4], self.__hand_sample1[5])))
@@ -502,6 +503,7 @@ class HandEyeCali(object):
             cv2.putText(img, "Current eye position is None", (20, row_begin),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         else:
+            cali_pos = (cali_pos[0], cali_pos[1], cali_pos[2])
             cv2.putText(img, "Current eye position: %3.0f, %3.0f, %3.0f" % cali_pos, (20, row_begin),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         row_begin += 20
@@ -534,7 +536,8 @@ class HandEyeCali(object):
             cv2.putText(img, "Current eye sample is None", (20, row_begin),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         else:
-            cv2.putText(img, "Current eye sample is (%1.1f, %1.1f, %1.1f)" % self.__eye_sample, (20, row_begin),
+            eye = (self.__eye_sample[0], self.__eye_sample[1], self.__eye_sample[2])
+            cv2.putText(img, "Current eye sample is (%1.1f, %1.1f, %1.1f)" % eye, (20, row_begin),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         row_begin += 20
 

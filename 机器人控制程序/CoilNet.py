@@ -9,8 +9,8 @@ from ImageSet import LabelType
 class CoilNet(BaseImageNet):
     def __init__(self, img_size, output_size):
         super(CoilNet, self).__init__(regress=True, img_size=img_size, img_channels=1)
-        self.add_conv_layer(channels=8, kernel_size=5, padding=2, pool_size=2)
-        self.add_conv_layer(channels=16, kernel_size=5, padding=2, pool_size=2)
+        self.add_conv_layer(channels=8, kernel_size=3, padding=1, pool_size=2)
+        self.add_conv_layer(channels=16, kernel_size=3, padding=1, pool_size=2)
         self.add_conv_layer(channels=32, kernel_size=3, padding=1, pool_size=2)
         self.add_conv_layer(channels=64, kernel_size=3, padding=1, pool_size=2)
         self.add_conv_layer(channels=128, kernel_size=3, padding=1, pool_size=2)
@@ -106,7 +106,7 @@ if __name__ == '__main__':
 
         Net.train(train_set, eval_set, epoch_cnt=10000, mini_batch=64)
     else:
-        Net.load_model("加油口定位2021-11-20-17-51.pt")
+        Net.load_model("加油口定位2022-06-07-13-00.pt")
         eval_set = ImageSet("E:\\PlaneLabeledImages",
                             output_size=Net.output_size, img_size=Net.img_size)
         Net.test_net(eval_set)

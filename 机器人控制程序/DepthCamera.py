@@ -10,11 +10,10 @@ class DepthCamera(object):
     def __init__(self, resolution):
         self.resolution = resolution
         self.cam_params = None
-        self.RGBimage = None
-        self.Xmap = None
-        self.Ymap = None
-        self.Zmap = None
-        self.filter = None
+        self._RGBimage = None
+        self._Xmap = None
+        self._Ymap = None
+        self._Zmap = None
         self.ROI = None
         self.timestamp = time.time()
         self.rot_angle = 0    # 图像有可能需要旋转90°、180°、270°
@@ -46,14 +45,14 @@ class DepthCamera(object):
         cx = self.cam_params[2]
         cy = self.cam_params[3]
 
-        rows = self.Zmap.shape[0]
-        cols = self.Zmap.shape[1]
+        rows = self._Zmap.shape[0]
+        cols = self._Zmap.shape[1]
 
         array_ux = np.repeat([np.arange(cols) - cx], repeats=rows, axis=0)  # u-cx得到的矩阵值
         array_vy = (np.repeat([np.arange(rows) - cy], repeats=cols, axis=0)).T  # v-cy得到的矩阵值
 
-        self.Xmap = self.Zmap * array_ux / fx
-        self.Ymap = self.Zmap * array_vy / fy
+        self._Xmap = self._Zmap * array_ux / fx
+        self._Ymap = self._Zmap * array_vy / fy
 
     def camera_name(self):
         """
@@ -64,9 +63,9 @@ class DepthCamera(object):
     def get_XYZ_ROI(self, ROI=None):
         if ROI is None:
             ROI = self.ROI
-        X = self.__get_ROI(self.Xmap, ROI).copy()
-        Y = self.__get_ROI(self.Ymap, ROI).copy()
-        Z = self.__get_ROI(self.Zmap, ROI).copy()
+        X = self.__get_ROI(self._Xmap, ROI).copy()
+        Y = self.__get_ROI(self._Ymap, ROI).copy()
+        Z = self.__get_ROI(self._Zmap, ROI).copy()
         return X, Y, Z
 
     def get_Z_ROI(self, ROI=None):
@@ -77,8 +76,6 @@ class DepthCamera(object):
 
     def set_ROI(self, left, top, right, bottom):
         self.ROI = (left, top, right, bottom)
-        if self.filter is not None:
-            self.enable_LowPassFirstOrder(self.filter.alpha)
 
     def calc_point_XY(self, x_pixel, y_pixel, Z):
         fx = self.cam_params[0]
@@ -106,30 +103,13 @@ class DepthCamera(object):
         return px, py
 
     def refresh(self):
-        if self.Zmap is None:
-            return False
-
-        # rotate the image and Zmap as required
-        if int(self.rot_angle / 90):
-            self.RGBimage = np.rot90(self.RGBimage, int(self.rot_angle / 90))
-            self.Xmap = np.rot90(self.Zmap, int(self.rot_angle / 90))
-            self.Ymap = np.rot90(self.Zmap, int(self.rot_angle / 90))
-            self.Zmap = np.rot90(self.Zmap, int(self.rot_angle / 90))
-
-        if self.flipud:
-            self.RGBimage = np.flipud(self.RGBimage)
-            self.Xmap = np.flipud(self.Xmap)
-            self.Ymap = np.flipud(self.Ymap)
-            self.Zmap = np.flipud(self.Zmap)
-
-        # filter ROI region
-        if self.filter is not None:
-            ZmapROI = self.__get_ROI(self.Zmap, self.ROI)
-            ZmapROI[:] = self.filter.filter(ZmapROI)[:]
-
+        self._RGBimage = None
+        self._RGBimage_right = None
+        self._Zmap = None
         return True
 
-    def get_minmax_depth(self, Zmap):
+    @staticmethod
+    def get_minmax_depth(Zmap):
         # There are NaN and Inf in depth map, which lead to wrong max and min value.
         # To avoid this, convert Zmap into a masked array, which masks NaN and Inf values.
         mask = np.isnan(Zmap) | np.isinf(Zmap)
@@ -164,7 +144,7 @@ class DepthCamera(object):
         return image
 
     def get_RGBimage(self, ROIonly=False, width=None, mark_infeasible=False):
-        img = self.__get_ROI(self.RGBimage, self.ROI) if ROIonly else self.RGBimage
+        img = self.__get_ROI(self._RGBimage, self.ROI) if ROIonly else self._RGBimage
 
         if mark_infeasible:
             depth = self.__get_ROI(self.Zmap, self.ROI) if ROIonly else self.Zmap
@@ -189,31 +169,9 @@ class DepthCamera(object):
 
     def load_depth(self, file_name):
         xyz_map = np.load(file_name)
-        self.Xmap = xyz_map[:, :, 0]
-        self.Ymap = xyz_map[:, :, 1]
-        self.Zmap = xyz_map[:, :, 2]
-
-    def test(self, key, width=None):
-        self.refresh()
-        RGB_img = self.get_RGBimage(ROIonly=False, width=width, mark_infeasible=True)
-        Depth_img = self.get_depth_image(ROIonly=False, width=width)
-
-        #cv2.putText(RGB_img, "Save: S", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-        #cv2.putText(RGB_img, "Exit: E", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-
-        cv2.imshow(self.camera_identity() + "_RGB", RGB_img)
-        cv2.imshow(self.camera_identity() + "_Depth", Depth_img)
-
-        if key == ord('s') or key == ord('S'):
-            file_name = time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime())
-            self.save_RGB(file_name + "_" + self.camera_name() + "_RGB.jpg")
-            self.save_depth(file_name + "_" + self.camera_name() + "_depth")
-
-    def show_test_interface(self, width=None):
-        key = 0
-        while key != ord('e') and key != ord('E'):
-            key = cv2.waitKey(50) & 0xFF
-            self.test(key, width)
+        self._Xmap = xyz_map[:, :, 0]
+        self._Ymap = xyz_map[:, :, 1]
+        self._Zmap = xyz_map[:, :, 2]
 
     def show_3Dsurface(self, ROIonly=False):
         """

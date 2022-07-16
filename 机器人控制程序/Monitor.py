@@ -10,10 +10,19 @@ class Monitor(object):
     def __init__(self, dev_format):
         self.__init_devices(dev_format)
 
-        self.screen_num, self.screen_size = self.__init_screen()
-        if self.screen_num == 1:
-            self.screen_size = (int(self.screen_size[0] / 3), int(self.screen_size[1] / 3))
-        self.screen_img = np.zeros((self.screen_size[1], self.screen_size[0] * 3, 3), dtype=np.uint8)
+        """
+        self.screen_num, self.screen_size = self.__init_screen_old()
+        print("检测到%d个显示器" % self.screen_num)
+        if self.screen_num < 3:
+            print("显示器数量不足，仅有%d个显示器" % self.screen_num)
+
+        self.img_left = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
+        self.img_right = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
+        self.img_center = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
+        """
+
+        self.__init_screen()
+        self.img = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
 
     def __init_devices(self, dev_format):
         print("Initializing cameras")
@@ -29,7 +38,7 @@ class Monitor(object):
                 self.dev_list[1] = ICCamera(device_name=name, dev_format=dev_format)
             print("Device %s initialized" % name)
 
-    def __init_screen(self):
+    def __init_screen_old(self):
         """
         Obtain the screen size, and initialize the cv window.
         :return: None
@@ -39,21 +48,85 @@ class Monitor(object):
         self.screen_size = (screen_width, screen_height)
         self.screen_num = win32api.GetSystemMetrics(win32con.SM_CMONITORS)
 
-        cv2.namedWindow('window', cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty('window', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        cv2.moveWindow('window', 0, 0)
+        cv2.namedWindow('window_left', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("window_left", 1920, 1080)
+        cv2.moveWindow('window_left', x=-1920, y=0)
+        cv2.setWindowProperty('window_left', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+        cv2.namedWindow('window_right', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("window_right", 1920, 1080)
+        cv2.moveWindow('window_right', x=0, y=0)
+        cv2.setWindowProperty('window_right', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+        cv2.namedWindow('window_center', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("window_center", 1920, 1080)
+        cv2.moveWindow('window_center', x=1920, y=0)
+        cv2.setWindowProperty('window_center', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         return self.screen_num, self.screen_size
 
+    def __init_screen(self):
+        """
+        Obtain the screen size, and initialize the cv window.
+        :return: None
+        """
+        screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+        screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        self.screen_size = (screen_width, screen_height)
+
+        cv2.namedWindow('window', cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty('window', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    def __show_none_camera(self, screen_width, screen_height):
+        img = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+        cv2.putText(img, "The camera is lost", (600, int(screen_height / 2)), cv2.FONT_HERSHEY_SIMPLEX, 2, (20, 255, 20), 1)
+        return img
+
     def refresh(self):
-        for i, device in enumerate(self.dev_list):
-            img = device.snap()
-            if img is not None:
-                img = cv2.resize(img, self.screen_size)
-                self.screen_img[0: self.screen_size[1], i * self.screen_size[0]: (i+1) * self.screen_size[0], :] \
-                    = img[0: self.screen_size[1], 0: self.screen_size[0], :]
-            time.sleep(0.1)   # Note: this shall be removed when all the cameras are connected by USB3.0
-        cv2.imshow("window", self.screen_img)
+        screen_width = int(self.screen_size[0] / 3)
+        screen_height = self.screen_size[1]
+
+        if self.dev_list[0] is not None:
+            img_left = self.dev_list[0].snap()
+            if img_left is not None:
+                img_left = cv2.resize(img_left, (screen_width, screen_height))
+                img_left = cv2.flip(img_left, 0)
+                img_left = cv2.flip(img_left, 1)
+                self.img[:, 0: screen_width, :] = img_left[:, :, :]
+        else:
+            img_left = self.__show_none_camera(screen_width, screen_height)
+            self.img[:, 0: screen_width, :] = img_left[:, :, :]
+
+        if self.dev_list[1] is not None:
+            img_center = self.dev_list[1].snap()
+            if img_center is not None:
+                img_center = cv2.resize(img_center, (screen_width, screen_height))
+                self.img[:, screen_width: screen_width * 2, :] = img_center[:, :, :]
+        else:
+            img_center = self.__show_none_camera(screen_width, screen_height)
+            self.img[:, screen_width: screen_width * 2, :] = img_center[:, :, :]
+
+        if self.dev_list[2] is not None:
+            img_right = self.dev_list[2].snap()
+            if img_right is not None:
+                img_right = cv2.resize(img_right, (screen_width, screen_height))
+                self.img[:, screen_width * 2: screen_width * 3, :] = img_right[:, :, :]
+        else:
+            img_right = self.__show_none_camera(screen_width, screen_height)
+            self.img[:, screen_width * 2: screen_width * 3, :] = img_right[:, :, :]
+
+        cv2.imshow("window", self.img)
+
+        """
+        if img_left is not None:
+            cv2.imshow("window_left", img_left)
+
+        if img_center is not None:
+            cv2.imshow("window_center", img_center)
+
+        if img_right is not None:
+            cv2.imshow("window_right", img_right)
+        """
 
     def get_images(self):
         images = list()
@@ -78,7 +151,7 @@ class Monitor(object):
 
 
 if __name__ == '__main__':
-    monitor = Monitor(dev_format="RGB32 (1024x768)")
+    monitor = Monitor(dev_format="RGB24(2448x2048)")
     #monitor.stitch_test()
 
     while True:

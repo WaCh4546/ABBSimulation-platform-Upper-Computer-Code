@@ -16,24 +16,27 @@ class BiCameraCtrl(object):
         self._remote_port = remote_port
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.bind(("127.0.0.1", local_port))
+        self.socket.bind(("192.168.1.100", local_port))
         self.socket.settimeout(timeout)
 
     def send_order(self, trans, rotate):
         order = np.array((trans, rotate)).astype(np.uint8)
         self.socket.sendto(order, (self._remote_ip, self._remote_port))
-        rcv, addr = self.socket.recvfrom(32)
 
-        for i, byte in enumerate(rcv):
-            if byte != order[i]:
-                return False
+        try:
+           rcv, addr = self.socket.recvfrom(32)
+           for i, byte in enumerate(rcv):
+               if byte != order[i]:
+                   return False
+        except socket.timeout:
+            return False
         return True
 
 
 if __name__ == '__main__':
-    udp = BiCameraCtrl(local_port=1234, remote_ip="127.0.0.1", remote_port=4196, timeout=10)
+    udp = BiCameraCtrl(local_port=20005, remote_ip="192.168.1.101", remote_port=20001, timeout=1)
     try:
-        ret = udp.send_order(trans=1, rotate=2)
+        ret = udp.send_order(trans=2, rotate=1)
         print(ret)
     except socket.timeout:
         print("timeout!")

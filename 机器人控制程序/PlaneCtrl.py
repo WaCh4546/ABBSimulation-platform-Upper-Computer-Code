@@ -1,7 +1,7 @@
 import cv2
 import math
 import time
-import win32api,win32con
+import win32api, win32con
 import threading
 import pygame
 import psutil
@@ -16,6 +16,7 @@ from CVMenu import CVMenu
 from ICCamera import ICCamera
 from Axis7 import *
 from Gyro import gyro_indicator
+from ImgTrans import ImgTrans
 
 
 """
@@ -27,13 +28,15 @@ from Gyro import gyro_indicator
 ROBOT_IP = "192.168.1.104"
 ROBOT_PORT = 8002
 
+USCREEN_IP = "192.168.1.111"
+USCREEN_PORT = 10001
+
 EGM_IP = ROBOT_IP
 EGM_PORT = 6510
 
-AXIS7_IP = "192.168.1.6"
-#AXIS7_IP = "127.0.0.1"
-AXIS7_PORT = 4196
-AXIS7_LOCAL_PORT = 1234
+AXIS7_IP = "192.168.1.105"
+AXIS7_PORT = 2001
+AXIS7_LOCAL_PORT = 2002
 
 TEST_IN_LAB = False
 NO_ROBOT = False
@@ -48,6 +51,7 @@ y_max = 500
 
 pitch_to_spd = 16 #8
 roll_to_spd = 16 #8
+max_speed_x = 40
 
 FIXED_POS_EULERS = {
             'EGM start': [(2250, 0, 1250, 0, 0, 0, 100, 0)],
@@ -193,6 +197,8 @@ class PlaneCtrl(object):
 
         self.__gyro = gyro_indicator(width=300)
         self.__recording = False
+
+        self.img_trans = ImgTrans((USCREEN_IP, USCREEN_PORT))
 
         try:
             spd = np.loadtxt("PlaneSpeed.npy")
@@ -341,9 +347,11 @@ class PlaneCtrl(object):
 
         if caption == "Go zero":
             self.axis7.cmd = AXIS7_CMD.GO_ZERO
-        elif caption == "Move to far position":
+        elif caption == "Go to the middle position":
+            self.axis7.cmd = AXIS7_CMD.GO_MIDDLE
+        elif caption == "Move forward":
             self.axis7.cmd = AXIS7_CMD.MOVE_FWD
-        elif caption == "Move to near position":
+        elif caption == "Move backward":
             self.axis7.cmd = AXIS7_CMD.MOVE_BKWD
         elif caption == "Stop":
             self.axis7.cmd = AXIS7_CMD.STOP
@@ -405,8 +413,9 @@ class PlaneCtrl(object):
     def __enter_axis7_interface(self):
         self.menu.clear()
         self.menu.add_item("Go zero")
-        self.menu.add_item("Move to far position")
-        self.menu.add_item("Move to near position")
+        self.menu.add_item("Go to the middle position")
+        self.menu.add_item("Move forward")
+        self.menu.add_item("Move backward")
         self.menu.add_item("Stop")
         self.menu.add_item("Exit")
         self.__cur_interface = Interfaces.AXIS7
@@ -465,13 +474,14 @@ class PlaneCtrl(object):
                                                self.joystick.roll, self.joystick.throttle)
         self.plane_ctrl_thread.speed = speed
         """
+        # rotation_spd and movement_spd can both be modified online and stored
         self.plane_ctrl_thread.euler_K = self.rotation_spd
         self.plane_ctrl_thread.euler_to_spd = self.movement_spd
         self.plane_ctrl_thread.input = (self.joystick.yaw, self.joystick.pitch, self.joystick.roll)
 
         if self.axis7.zeroed:
             self.axis7.cmd = AXIS7_CMD.NORMAL_CTRL
-            self.axis7.speed = speed[0]
+            self.axis7.speed = -int(self.joystick.throttle * max_speed_x)
         else:
             self.axis7.cmd = AXIS7_CMD.STOP
 
@@ -574,11 +584,11 @@ class PlaneCtrl(object):
             self.__video = None
 
     def refresh(self):
-        time.sleep(0.05)
+        time.sleep(0.02)
 
         # refresh joystick and operations
         self.joystick.refresh()
-        #self.axis7.refresh()
+        self.axis7.refresh()
         self.__menu_operate()
         self.__interface_operate()
 
@@ -589,9 +599,7 @@ class PlaneCtrl(object):
         else:
             frame = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
         frame = self.__show_interface(frame)
-
-        if self.__recording:
-            self.__video_record(frame)
+        self.img_trans.send(frame)
 
         self.__video_record(frame)
 
