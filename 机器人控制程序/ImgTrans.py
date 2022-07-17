@@ -6,85 +6,144 @@ import time
 import threading
 
 
+class ImgSender(threading.Thread):
+    def __init__(self, remote_addr):
+        threading.Thread.__init__(self)
+        self.remote_addr = remote_addr
+        self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.lock = threading.RLock()
+        self.image = None
+        self.connected = False
+        self.terminated = False
+        self.error = False
+        self.err_string = None
+        self.start()
+
+    def __init_connection(self):
+        try_times = 3
+        while try_times:
+            try:
+                try_times -= 1
+                self.tcp.settimeout(5.0)
+                self.tcp.connect(self.remote_addr)
+                self.error = False
+                return True
+            except socket.timeout:
+                self.error = True
+                self.err_string = "Timeout in connecting U-screen"
+            except WindowsError as e:
+                self.error = True
+                self.err_string = e
+        return False
+
+    def __send(self, img):
+        # transform image into jpeg
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+        result, img_encode = cv2.imencode('.jpg', img, encode_param)
+        img_data = np.array(img_encode).flatten()
+        img_size = len(img_data)
+
+        stream_head = np.array((img_size >> 24, img_size >> 16, img_size >> 8, img_size), dtype=np.uint8)
+        stream_data = np.hstack((stream_head, img_data))
+
+        try:
+            self.tcp.settimeout(1.0)
+            self.tcp.send(stream_data)
+            self.error = False
+        except socket.timeout:
+            self.error = True
+            self.err_string = "Timeout in sending image"
+        except WindowsError as e:
+            self.error = True
+            self.err_string = e
+        return self.error
+
+    def run(self):
+        while not self.terminated:
+            time.sleep(0.02)
+
+            if not self.connected:
+                if not self.__init_connection():
+                    self.terminated = True
+                    continue
+                else:
+                    self.connected = True
+
+            self.lock.acquire()
+            if self.image is not None:
+                if self.__send(self.image):
+                    self.connected = False
+                self.image = None
+            self.lock.release()
+        self.tcp.close()
+
+    def send(self, image):
+        self.lock.acquire()
+        self.image = image.copy()
+        self.lock.release()
+        return True
+
+    def terminate(self):
+        self.terminated = True
+        self.join()
+
+
 class ImgTrans(object):
     def __init__(self, remote_addr, local_port=None):
         self.remote_addr = remote_addr
-        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.tcp.settimeout(5.0)
 
         if remote_addr is None:
-            self.udp.bind(('localhost', local_port))
+            self.tcp.bind(('localhost', local_port))
+            self.tcp.listen()
+        else:
+            self.tcp.connect(remote_addr)
 
     def send(self, img):
+        # transform image into jpeg
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
         result, img_encode = cv2.imencode('.jpg', img, encode_param)
-        data = np.array(img_encode)
+        img_data = np.array(img_encode).flatten()
+        img_size = len(img_data)
+        print("img size = %d" % img_size)
 
-        seg_size_max = 16384
-        img_size = len(data)
-        seg_count = math.ceil(img_size / seg_size_max)
-        seg_index = 0
-        while seg_index < seg_count:
-            seg_begin = seg_index * seg_size_max
-            seg_size = seg_size_max if seg_index < seg_count - 1 else len(data) - seg_begin
-            seg_head = np.array((img_size >> 24, img_size >> 16, img_size >> 8, img_size, seg_count, seg_index),
-                                dtype=np.uint8)
-            seg_data = data[seg_begin: seg_begin + seg_size].flatten()
-            seg = np.hstack((seg_head, seg_data))
-            self.udp.sendto(seg, self.remote_addr)
+        stream_head = np.array((img_size >> 24, img_size >> 16, img_size >> 8, img_size), dtype=np.uint8)
+        stream_data = np.hstack((stream_head, img_data))
 
-            seg_index += 1
-
-    def receive(self):
-        seg_size_max = 16384
-        img_data = None
-
-        self.udp.settimeout(0.2)
-        while True:
-            try:
-                data, addr = self.udp.recvfrom(seg_size_max + 6)
-                data = np.frombuffer(data, dtype=np.uint8)
-                img_size = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3]
-                seg_count = data[4]
-                seg_index = data[5]
-                seg_begin = seg_index * seg_size_max
-                seg_size = len(data) - 6
-
-                if img_data is None:
-                    img_data = np.zeros(img_size, dtype=np.uint8)
-                img_data[seg_begin: seg_begin + seg_size] = data[6: len(data)]
-
-                if seg_index >= seg_count - 1:
-                    img = cv2.imdecode(img_data, 1)
-                    return img
-            except socket.timeout:
-                return None
-
-
-class Receiver_Test(threading.Thread):
-    def __init__(self):
-        threading.Thread.__init__(self)
-        self.rcver = ImgTrans(remote_addr=None, local_port=6002)
-
-    def run(self):
-        while True:
-            cv2.waitKey(20)
-            img = self.rcver.receive()
-            if img is not None:
-                #img = cv2.resize(img, (800, 600))
-                cv2.imshow('client', img)
-            else:
-                print("timeout")
+        try:
+            self.tcp.settimeout(1.0)
+            self.tcp.send(stream_data)
+            return True
+        except socket.timeout:
+            print("Timeout in sending image")
+            return True
+        except WindowsError as e:
+            print("Failed to send image")
+            print(e)
+            return False
 
 
 if __name__ == '__main__':
     #rcver = Receiver_Test()
     #rcver.start()
 
-    sender = ImgTrans(remote_addr=('localhost', 10000))
-    raw_img = cv2.imread("G:\\IMG_6104.jpg")
+    try:
+        sender = ImgSender(remote_addr=('192.168.1.5', 10000))
+    except WindowsError as e:
+        print(e)
+        exit(0)
+
+    raw_img = cv2.imread("d:\\img.jpg")
     raw_img = cv2.resize(raw_img, (2208, 1242))
+    cnt = 0
     while True:
         time.sleep(0.3)
         img = raw_img.copy()
         cv2.putText(img, time.strftime("images\\%Y_%m_%d_%H_%M_%S.jpg", time.localtime()), (20, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        print("Start trans")
         sender.send(img)
+        if sender.error:
+            print(sender.err_string)
+        cnt += 1
+        print("send %d" % cnt)

@@ -121,8 +121,6 @@ class PlaneJoystick(object):
             self.menu_option = self.joystick.hat[0][1]
         elif self.joystick.button_click[1]:
             self.menu_option = 2
-        else:
-            self.menu_option = 0
 
 
 class TestJoystick_Plane(object):
@@ -195,8 +193,6 @@ class BoomJoystick(object):
             self.menu_option = self.joystick.hat[0][1]
         elif self.joystick.button_click[1]:
             self.menu_option = 2
-        else:
-            self.menu_option = 0
 
 
 class TestJoystick_Boom(object):

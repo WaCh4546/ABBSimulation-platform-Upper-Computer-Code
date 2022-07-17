@@ -21,7 +21,7 @@ from PID import PID
 from ICCamera import ICCamera
 from BiCameraCtrl import BiCameraCtrl
 from Monitor3D import Monitor3D
-from ImgTrans import ImgTrans
+from ImgTrans import ImgSender
 
 """
 2022.02.22: The program is slightly fined.
@@ -57,7 +57,7 @@ BINOCULAR_IP = "192.168.1.111"
 BINOCULAR_PORT = 2005
 BINOCULAR_LOCAL_PORT = 20005
 
-USCREEN_IP = "192.168.1.111"
+USCREEN_IP = "192.168.1.5"
 USCREEN_PORT = 10000
 
 # TRACK_MODEL = "加油口定位2021-11-20-17-51.pt"
@@ -72,7 +72,7 @@ FIXED_POS_EULERS = {
 
 BOOM_LENGTH = 2842           # in mm
 BOOM_STRETCH_RANGE = 1000    # in mm
-BOOM_STRETCH_SPEED = 0.5     # the boom stretching is controlled by a low-pass filter
+BOOM_STRETCH_SPEED = 0.7     # the boom stretching is controlled by a low-pass filter
 BOOM_ANGLE_RANGE = 10        # in degree
 BOOM_ANGLE_LINEAR = 8        # in degree
 BOOM_ANGLE_SPD_LMT = 0.1     # Dead-zone speed, that is, the angle speed be zero if it's smaller than this value.
@@ -88,7 +88,7 @@ BICAMERA_RIGHT = "DFK 33UX265 4124038"
 ZED_MONITOR = 23441
 ZED_ON_BOOM = 6468932
 
-TEST_IN_LAB = True
+TEST_IN_LAB = False
 NO_ROBOT = False
 NO_BICAMERA = False
 SHOW_MONITOR_INFO = True
@@ -102,7 +102,7 @@ GAUGE_SCALE_CNT = 5
 MENU_LEFT = 60
 MENU_TOP = 60
 
-SHOW_RAW_TRACKER = True
+SHOW_RAW_TRACKER = False
 
 
 class BoomCtrlThread(threading.Thread):
@@ -198,7 +198,7 @@ class BoomCtrlThread(threading.Thread):
         # boom length is directly controlled, so it is simplly limited within range
         self.yaw = self.__speed_accumulate(self.yaw_speed, self.yaw, BOOM_ANGLE_LINEAR, BOOM_ANGLE_RANGE)
         self.pitch = self.__speed_accumulate(self.pitch_speed, self.pitch, BOOM_ANGLE_LINEAR, BOOM_ANGLE_RANGE)
-        self.stretch = BOOM_STRETCH_SPEED * self.stretch + (1.0 - BOOM_STRETCH_SPEED) * self.stretch_order
+        self.stretch = (1.0 - BOOM_STRETCH_SPEED) * self.stretch + BOOM_STRETCH_SPEED * self.stretch_order
 
         robot_yaw = self.init_euler[0] + self.yaw
         robot_pitch = self.init_euler[1] + self.pitch
@@ -255,6 +255,11 @@ class BoomCtrlThread(threading.Thread):
             self.__lst_time = time.time()
 
 
+class ImgToUScreen(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+
 class Interfaces(Enum):
     ROOT = 0,
     PARK = 1,
@@ -286,7 +291,7 @@ class FlyingBoomCtrl(object):
         self.boom_ctrl_thread = BoomCtrlThread(self.lock, self.joystick)
         self.boom_ctrl_thread.start()
 
-        self.img_trans = ImgTrans((USCREEN_IP, USCREEN_PORT))
+        self.img_sender = None
 
         self.__enter_root_interface()
 
@@ -403,6 +408,16 @@ class FlyingBoomCtrl(object):
             self.__enter_camera_interface()
         elif caption == "Start test":
             self.__enter_manu_interface()
+        elif caption == "Start showing on U-screen":
+            try:
+                self.img_sender = ImgSender((USCREEN_IP, USCREEN_PORT))
+                menu_item['caption'] = "Stop showing on U-screen"
+            except WindowsError:
+                self.__print("Failed to connect U-screen computer")
+        elif caption == "Stop showing on U-screen":
+            self.img_sender.terminate()
+            self.img_sender = None
+            menu_item['caption'] = "Start showing on U-screen"
         elif caption == "Start recording":
             menu_item['caption'] = "Stop recording"
             self.__recording = True
@@ -412,6 +427,8 @@ class FlyingBoomCtrl(object):
         elif caption == "Take a picture":
             self.__take_picture = True
         elif caption == "Exit":
+            if self.img_sender is not None:
+                self.img_sender.terminate()
             self.boom_ctrl_thread.terminated = True
             self.boom_ctrl_thread.join()
             exit(0)
@@ -469,6 +486,7 @@ class FlyingBoomCtrl(object):
         self.menu.add_item("Switch to stereo-camera" if self.__show_boom_eye else "Switch to depth-camera")
         self.menu.add_item("Park robot")
         self.menu.add_item("Start test")
+        self.menu.add_item("Start showing on U-screen" if self.img_sender is None else "Stop showing on U-screen")
         self.menu.add_item("Start recording")
         self.menu.add_item("Take a picture")
         self.menu.add_item("Exit")
@@ -553,6 +571,7 @@ class FlyingBoomCtrl(object):
         self.tracker.track(self.boom_eye.depth_camera.get_RGBimage())
         if self.boom_eye is not None and self.tracker.target is not None:
             self.__target_pos = self.boom_eye.get_hand_position(self.tracker.target[0], self.tracker.target[1])
+        self.boom_ctrl_thread.auto_tracking = False
 
     def __enter_auto_interface(self):
         self.menu.clear()
@@ -576,6 +595,7 @@ class FlyingBoomCtrl(object):
 
             self.boom_ctrl_thread.yaw_speed = spd_yaw
             self.boom_ctrl_thread.pitch_speed = spd_pitch
+        self.boom_ctrl_thread.auto_tracking = True
 
     def __interface_operate(self):
         if self.__cur_interface == Interfaces.ROOT:
@@ -851,8 +871,6 @@ class FlyingBoomCtrl(object):
         pass
 
     def refresh(self):
-        time.sleep(0.01)
-
         # refresh ZED camera
         if self.boom_eye is not None:
             self.boom_eye.refresh()
@@ -866,7 +884,13 @@ class FlyingBoomCtrl(object):
         if img_left is not None:
             img_left = self.__show_interface(img=img_left, left=True)
             self.__video_record(img_left)
-            self.img_trans.send(img_left)
+
+            if self.img_sender is not None:
+                if self.img_sender.error:
+                    self.__print(self.img_sender.err_string)
+                    self.img_sender = None
+                else:
+                    self.img_sender.send(img_left)
         if img_right is not None:
             img_right = self.__show_interface(img=img_right, left=False)
         self.monitor.show(img_left, img_right)
@@ -874,6 +898,8 @@ class FlyingBoomCtrl(object):
 
         if self.boom_eye is not None:
             self.__picture_record(self.boom_eye.depth_camera.get_RGBimage())
+
+        cv2.waitKey(10)
 
 
 if __name__ == '__main__':
